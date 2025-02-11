@@ -3,12 +3,12 @@ package main
 import (
 	"net/http"
 )
-type apiHandler struct{}
+// type apiHandler struct{}
 
-func (apiHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
+// func (apiHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
 func main() {
 	mux := http.NewServeMux()
-	// mux.Handle("/api/", apiHandler{})
+	mux.Handle("/", http.FileServer(http.Dir('.')))
 	// mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 	// 	if r.URL.Path != "/" {
 	// 		http.NotFound(w, r)
