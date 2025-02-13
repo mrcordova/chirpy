@@ -233,7 +233,7 @@ func (cfg  *apiConfig) handlerChirpRetrieve(w http.ResponseWriter, r *http.Reque
 
 	uuid, err :=  uuid.Parse(id)
 	if err != nil {
-		log.Fatalf("Failed to parse UUID", err)
+		log.Fatalf("Failed to parse UUID: %v", err)
 		return
 	}
 
