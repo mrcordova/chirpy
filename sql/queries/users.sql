@@ -1,7 +1,7 @@
 -- name: CreateUser :one
-INSERT INTO users (id, created_at, updated_at, email)
+INSERT INTO users (id, created_at, updated_at, email, hashed_password)
 VALUES (
-    gen_random_uuid(), NOW(), NOw(), $1
+    gen_random_uuid(), NOW(), NOw(), $1, $2
 )
 RETURNING *;
 
@@ -16,6 +16,9 @@ VALUES(
 )
 RETURNING *;
 
+-- name: GetUser :one
+SELECT * FROM users
+WHERE email = $1 LIMIT 1;
 
 -- name: GetChirps :many
 SELECT * FROM chirps

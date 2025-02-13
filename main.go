@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/mrcordova/chirpy/internal/auth"
 	"github.com/mrcordova/chirpy/internal/database"
 )
 
@@ -67,6 +68,8 @@ func main() {
 	mux.HandleFunc("POST /api/chirps",apiCfg.handlerChirps)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerChirpsRetrieve)
 	mux.HandleFunc("GET /api/chirps/{chirpID}",apiCfg.handlerChirpRetrieve)
+
+	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
@@ -101,12 +104,14 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request)  {
 	type parameters struct {
 		Email string `json:"email"`
+		Password string `json:"password"`
 	}
 	type User struct {
 		Id uuid.UUID `json:"id"`
 		Created_at time.Time `json:"created_at"`
 		Updated_at time.Time `json:"updated_at"`
 		Email string `json:"email"`
+		Password  string    `json:"-"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -118,8 +123,13 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request)  {
 		return
 	}
 
+	hash_password, err := auth.HashPassword(params.Password)
+	if err != nil {
+		log.Fatalf("Failed to hash password")
+		return
+	}
 
-	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{ Email: params.Email, HashedPassword: hash_password })
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create user", err)
 		return
@@ -240,6 +250,61 @@ func (cfg  *apiConfig) handlerChirpRetrieve(w http.ResponseWriter, r *http.Reque
 		Body: dbChirp.Body,
 		UserId: dbChirp.UserID,
 	})
+
+}
+
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request)  {
+	type parameters struct {
+		Email string `json:"email"`
+		Password string `json:"password"`
+	}
+	type User struct {
+		Id uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Email string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
+		return
+	}
+
+	user, err := cfg.db.GetUser(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized,"Incorrect email or password", err)
+		return
+	}
+	passwordErr := auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	if passwordErr != nil {
+		respondWithError(w, http.StatusUnauthorized,"Incorrect email or password", err)
+		return
+	}
+
+	// hash_password, err := auth.HashPassword(params.Password)
+	// if err != nil {
+	// 	log.Fatalf("Failed to hash password")
+	// 	return
+	// }
+
+	// user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{ Email: params.Email, HashedPassword: hash_password })
+	// if err != nil {
+	// 	respondWithError(w, http.StatusInternalServerError, "Couldn't create user", err)
+	// 	return
+	// }
+
+
+	respondWithJSON(w, http.StatusOK, User{
+		Id: user.ID,
+		Created_at: user.CreatedAt,
+		Updated_at: user.UpdatedAt,
+		Email: user.Email,
+
+	} )
 
 }
 
