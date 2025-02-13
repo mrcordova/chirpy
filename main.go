@@ -23,6 +23,15 @@ type apiConfig struct {
 	platform string
 }
 
+
+type Chirp struct {
+	Id uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body string `json:"body"`
+	UserId uuid.UUID `json:"user_id"`
+}
+
 func main() {
 
 
@@ -56,6 +65,8 @@ func main() {
 	// mux.HandleFunc("POST /api/validate_chirp", handlerChirpsValidate)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerUsers)
 	mux.HandleFunc("POST /api/chirps",apiCfg.handlerChirps)
+	mux.HandleFunc("GET /api/chirps", apiCfg.handlerChirpsRetrieve)
+	mux.HandleFunc("GET /api/chirps/{chirpID}",apiCfg.handlerChirpRetrieve)
 	
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
@@ -178,6 +189,58 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request)  {
 		Body: cleaned,
 		UserId: chirp.UserID,
 	})
+}
+
+func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Request) {
+	dbChirps, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps", err)
+		return
+	}
+
+	chirps := []Chirp{}
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, Chirp{
+			Id:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			UserId:    dbChirp.UserID,
+			Body:      dbChirp.Body,
+		})
+	}
+
+	respondWithJSON(w, http.StatusOK, chirps)
+}
+
+
+func (cfg  *apiConfig) handlerChirpRetrieve(w http.ResponseWriter, r *http.Request)  {
+	id := r.PathValue("chirpID")
+
+	if id == "" {
+		log.Fatalf("Failed to get ID")
+		return 
+	}
+
+	uuid, err :=  uuid.Parse(id)
+	if err != nil {
+		log.Fatalf("Failed to parse UUID", err)
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(r.Context(), uuid)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Not Found", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, Chirp {
+		Id: dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body: dbChirp.Body,
+		UserId: dbChirp.UserID,
+	})
+
 }
 
 
