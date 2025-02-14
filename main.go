@@ -82,6 +82,8 @@ func main() {
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh )
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke )
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUsers )
+
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerChirpsDelete)
 	
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
@@ -458,6 +460,38 @@ func (cfg *apiConfig) handlerUpdateUsers(w http.ResponseWriter, r *http.Request)
 		Email: newUser.Email,
 
 	})
+
+}
+
+func (cfg *apiConfig) handlerChirpsDelete(w http.ResponseWriter, r *http.Request)  {
+	chirpID := r.PathValue("chirpID")
+	accessToken, err := auth.GetBearerToken(r.Header)
+
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "no access token", err)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(accessToken, cfg.jwtSecret)
+	if err !=  nil {
+		respondWithError(w, http.StatusForbidden, "could not validate access token", err)
+		return
+	}
+
+	chirpId, err := uuid.Parse(chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusForbidden, "could not convert chirp id to uuid", err)
+		return	
+	}
+	_, err = cfg.db.DeleteChirp(r.Context(), database.DeleteChirpParams{
+		ID: chirpId,
+		UserID: userID,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusForbidden, "Chirp not found", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 
 }
 
