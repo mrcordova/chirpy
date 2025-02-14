@@ -24,6 +24,7 @@ type apiConfig struct {
 	db *database.Queries
 	platform string
 	jwtSecret string
+	polkaApiKey string
 }
 
 type User struct {
@@ -31,6 +32,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	IsChirpyRed bool `json:"is_chirpy_red"`
 	Password  string    `json:"-"`
 }
 type Chirp struct {
@@ -65,6 +67,7 @@ func main() {
 		db:             dbQueries,
 		platform: os.Getenv("PLATFORM"),
 		jwtSecret: os.Getenv("JWT_SECRET"),
+		polkaApiKey: os.Getenv("POLKA_API_KEY"),
 	}
 
 
@@ -84,6 +87,8 @@ func main() {
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUsers )
 
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerChirpsDelete)
+
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlerPolkaMembership)
 	
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
@@ -120,13 +125,13 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request)  {
 		Email string `json:"email"`
 		Password string `json:"password"`
 	}
-	type User struct {
-		Id uuid.UUID `json:"id"`
-		Created_at time.Time `json:"created_at"`
-		Updated_at time.Time `json:"updated_at"`
-		Email string `json:"email"`
-		Password  string    `json:"-"`
-	}
+	// type User struct {
+	// 	Id uuid.UUID `json:"id"`
+	// 	Created_at time.Time `json:"created_at"`
+	// 	Updated_at time.Time `json:"updated_at"`
+	// 	Email string `json:"email"`
+	// 	Password  string    `json:"-"`
+	// }
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -149,11 +154,13 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request)  {
 		return
 	}
 
+
 	respondWithJSON(w, http.StatusCreated, User{
-		Id: user.ID,
-		Created_at: user.CreatedAt,
-		Updated_at: user.UpdatedAt,
+		ID: user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
 		Email: user.Email,
+		IsChirpyRed: user.IsChirpyRed.Bool,
 
 	} )
 
@@ -358,6 +365,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request)  {
 			CreatedAt: user.CreatedAt,
 			UpdatedAt: user.UpdatedAt,
 			Email:     user.Email,
+			IsChirpyRed: user.IsChirpyRed.Bool,
 		},
 		Token: accessToken,
 		RefreshToken: refreshToken,
@@ -458,6 +466,7 @@ func (cfg *apiConfig) handlerUpdateUsers(w http.ResponseWriter, r *http.Request)
 		CreatedAt: newUser.CreatedAt,
 		UpdatedAt: newUser.UpdatedAt,
 		Email: newUser.Email,
+		IsChirpyRed: newUser.IsChirpyRed.Bool,
 
 	})
 
@@ -495,4 +504,39 @@ func (cfg *apiConfig) handlerChirpsDelete(w http.ResponseWriter, r *http.Request
 
 }
 
+func (cfg *apiConfig) handlerPolkaMembership(w http.ResponseWriter, r *http.Request)  {
+	type Parameters struct {
+		Event string `json:"event"`
+		Data struct {
+			UserId uuid.UUID `json:"user_id"`
+		} `json:"data"`
+	}
+	apiKey, apiErr := auth.GetApiKey(r.Header)
+	if apiKey != os.Getenv("POLKA_API_KEY") {
+		respondWithError(w, http.StatusUnauthorized, "incorrect api key", apiErr)
+		return
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := Parameters{}
+
+	if err := decoder.Decode(&params); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to decode", err)
+		return
+	}
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	_, err  := cfg.db.UpdateUserMembership(r.Context(), database.UpdateUserMembershipParams{
+		IsChirpyRed: sql.NullBool{Bool: true, Valid: true},
+		ID: params.Data.UserId,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "user can not be found", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
 
