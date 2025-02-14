@@ -28,3 +28,20 @@ ORDER BY created_at ASC;
 -- name: GetChirp :one
 SELECT * FROM chirps
 WHERE id = $1 LIMIT 1;
+
+
+-- name: CreateRefreshToken :one
+INSERT INTO refresh_tokens(token, created_at, updated_at, expires_at, revoked_at, user_id)
+VALUES (
+    $1, NOw(), NOw(), $2, $3, $4
+)
+RETURNING *;
+
+-- name: GetRefreshToken :one
+SELECT * FROM refresh_tokens
+WHERE token = $1 LIMIT 1;
+
+-- name: UpdateRefreshToken :exec
+UPDATE refresh_tokens
+SET updated_at = NOW(), revoked_at = NOw()
+WHERE token = $1;
