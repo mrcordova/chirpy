@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,9 +23,16 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db *database.Queries
 	platform string
+	jwtSecret string
 }
 
-
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+	Password  string    `json:"-"`
+}
 type Chirp struct {
 	Id uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
@@ -56,6 +64,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		db:             dbQueries,
 		platform: os.Getenv("PLATFORM"),
+		jwtSecret: os.Getenv("JWT_SECRET"),
 	}
 
 
@@ -148,57 +157,75 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request)  {
 func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request)  {
 	type parameters struct {
 		Body string `json:"body"`
-		UserId uuid.UUID `json:"user_id"`
 	}
-	type returnVals struct {
-		Id uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Body string `json:"body"`
-		UserId uuid.UUID `json:"user_id"`
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find JWT", err)
+		return
 	}
-	profaneWords := map[string]string{"kerfuffle": "****", "sharbert": "****","fornax": "****"}
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT", err)
+		return
+	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
 	}
 
-	const maxChirpLength = 140
-	if len(params.Body) > maxChirpLength {
-		respondWithError(w, http.StatusBadRequest, "Chirp is too long", nil)
+	cleaned, err := validateChirp(params.Body)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, err.Error(), err)
 		return
 	}
 
 	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
-		Body: params.Body,
-		UserID: params.UserId,
+		Body:   cleaned,
+		UserID: userID,
 	})
-
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create chirp", err)
 		return
 	}
-	
-	
-	bodySlice := strings.Fields(chirp.Body)
-	for i, word := range bodySlice {
-		lowercaseWord := strings.ToLower(word)
-		if val, ok := profaneWords[lowercaseWord]; ok {
-			bodySlice[i] = val
-		}
-	}
-	cleaned := getCleanedBody(params.Body, profaneWords)
-	respondWithJSON(w, http.StatusCreated, returnVals{
-		Id: chirp.ID,
+
+	respondWithJSON(w, http.StatusCreated, Chirp{
+		Id:        chirp.ID,
 		CreatedAt: chirp.CreatedAt,
 		UpdatedAt: chirp.UpdatedAt,
-		Body: cleaned,
-		UserId: chirp.UserID,
+		Body:      chirp.Body,
+		UserId:    chirp.UserID,
 	})
+}
+func validateChirp(body string) (string, error) {
+	const maxChirpLength = 140
+	if len(body) > maxChirpLength {
+		return "", errors.New("Chirp is too long")
+	}
+
+	badWords := map[string]struct{}{
+		"kerfuffle": {},
+		"sharbert":  {},
+		"fornax":    {},
+	}
+	cleaned := getCleanedBody(body, badWords)
+	return cleaned, nil
+}
+
+func getCleanedBody(body string, badWords map[string]struct{}) string {
+	words := strings.Split(body, " ")
+	for i, word := range words {
+		loweredWord := strings.ToLower(word)
+		if _, ok := badWords[loweredWord]; ok {
+			words[i] = "****"
+		}
+	}
+	cleaned := strings.Join(words, " ")
+	return cleaned
 }
 
 func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Request) {
@@ -254,21 +281,20 @@ func (cfg  *apiConfig) handlerChirpRetrieve(w http.ResponseWriter, r *http.Reque
 }
 
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request)  {
-	type parameters struct {
-		Email string `json:"email"`
-		Password string `json:"password"`
+		type parameters struct {
+		Password         string `json:"password"`
+		Email            string `json:"email"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
-	type User struct {
-		Id uuid.UUID `json:"id"`
-		Created_at time.Time `json:"created_at"`
-		Updated_at time.Time `json:"updated_at"`
-		Email string `json:"email"`
+	type response struct {
+		User
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
-
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
@@ -276,35 +302,40 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request)  {
 
 	user, err := cfg.db.GetUser(r.Context(), params.Email)
 	if err != nil {
-		respondWithError(w, http.StatusUnauthorized,"Incorrect email or password", err)
-		return
-	}
-	passwordErr := auth.CheckPasswordHash(params.Password, user.HashedPassword)
-	if passwordErr != nil {
-		respondWithError(w, http.StatusUnauthorized,"Incorrect email or password", err)
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password", err)
 		return
 	}
 
-	// hash_password, err := auth.HashPassword(params.Password)
-	// if err != nil {
-	// 	log.Fatalf("Failed to hash password")
-	// 	return
-	// }
+	err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password", err)
+		return
+	}
 
-	// user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{ Email: params.Email, HashedPassword: hash_password })
-	// if err != nil {
-	// 	respondWithError(w, http.StatusInternalServerError, "Couldn't create user", err)
-	// 	return
-	// }
+	expirationTime := time.Hour
+	if params.ExpiresInSeconds > 0 && params.ExpiresInSeconds < 3600 {
+		expirationTime = time.Duration(params.ExpiresInSeconds) * time.Second
+	}
 
+	accessToken, err := auth.MakeJWT(
+		user.ID,
+		cfg.jwtSecret,
+		expirationTime,
+	)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create access JWT", err)
+		return
+	}
 
-	respondWithJSON(w, http.StatusOK, User{
-		Id: user.ID,
-		Created_at: user.CreatedAt,
-		Updated_at: user.UpdatedAt,
-		Email: user.Email,
-
-	} )
+	respondWithJSON(w, http.StatusOK, response{
+		User: User{
+			ID:        user.ID,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+			Email:     user.Email,
+		},
+		Token: accessToken,
+	})
 
 }
 
