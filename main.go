@@ -81,6 +81,7 @@ func main() {
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh )
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke )
+	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUsers )
 	
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
@@ -362,14 +363,6 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request)  {
 
 }
 
-package main
-
-import (
-	"net/http"
-	"time"
-
-	"github.com/bootdotdev/learn-http-servers/internal/auth"
-)
 
 func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 	type response struct {
@@ -382,14 +375,14 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := cfg.db.GetUserFromRefreshToken(r.Context(), refreshToken)
+	user, err := cfg.db.GetRefreshToken(r.Context(), refreshToken)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Couldn't get user for refresh token", err)
 		return
 	}
 
 	accessToken, err := auth.MakeJWT(
-		user.ID,
+		user.UserID,
 		cfg.jwtSecret,
 		time.Hour,
 	)
@@ -410,13 +403,62 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = cfg.db.RevokeRefreshToken(r.Context(), refreshToken)
+	err = cfg.db.UpdateRefreshToken(r.Context(), refreshToken)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't revoke session", err)
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) handlerUpdateUsers(w http.ResponseWriter, r *http.Request)  {
+	accessToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't get token", err)
+		return
+	}
+	type Parameters struct {
+		Email string `json:"email"`
+		Password string `json:"password"`
+	}
+	
+	decoder := json.NewDecoder(r.Body)
+	params := Parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't get token", err)
+		return
+	}
+	hashPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't get token", err)
+		return
+	}
+	userId, err := auth.ValidateJWT(accessToken, cfg.jwtSecret)
+
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't get token", err)
+		return
+	}
+	newUser, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+		Email: params.Email,
+		HashedPassword: hashPassword,
+		ID: userId,
+	})
+
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't get token", err)
+		return
+	}
+	respondWithJSON(w, http.StatusOK, User{
+		ID: newUser.ID,
+		CreatedAt: newUser.CreatedAt,
+		UpdatedAt: newUser.UpdatedAt,
+		Email: newUser.Email,
+
+	})
+
 }
 
 
