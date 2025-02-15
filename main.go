@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -241,6 +242,15 @@ func getCleanedBody(body string, badWords map[string]struct{}) string {
 }
 
 func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Request) {
+	s := r.URL.Query().Get("author_id")
+	sortChoice := r.URL.Query().Get("sort")
+	var authorId uuid.UUID
+	authorId, err := uuid.Parse(s)
+	if err != nil{
+		authorId = uuid.Nil
+	}
+	
+
 	dbChirps, err := cfg.db.GetChirps(r.Context())
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps", err)
@@ -249,13 +259,19 @@ func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Reque
 
 	chirps := []Chirp{}
 	for _, dbChirp := range dbChirps {
-		chirps = append(chirps, Chirp{
-			Id:        dbChirp.ID,
-			CreatedAt: dbChirp.CreatedAt,
-			UpdatedAt: dbChirp.UpdatedAt,
-			UserId:    dbChirp.UserID,
-			Body:      dbChirp.Body,
-		})
+		if authorId == dbChirp.UserID || authorId == uuid.Nil {
+			chirps = append(chirps, Chirp{
+				Id:        dbChirp.ID,
+				CreatedAt: dbChirp.CreatedAt,
+				UpdatedAt: dbChirp.UpdatedAt,
+				UserId:    dbChirp.UserID,
+				Body:      dbChirp.Body,
+			})
+		} 
+	}
+
+	if sortChoice == "desc" {
+		sort.Slice(chirps, func(i, j int) bool { return chirps[i].CreatedAt.After(chirps[j].CreatedAt)})
 	}
 
 	respondWithJSON(w, http.StatusOK, chirps)
